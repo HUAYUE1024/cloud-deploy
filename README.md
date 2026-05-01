@@ -2,7 +2,7 @@
 
 <div align="center">
 
-![Version](https://img.shields.io/badge/version-3.0.0-blue.svg)
+![Version](https://img.shields.io/badge/version-3.1.0-blue.svg)
 ![License](https://img.shields.io/badge/license-MIT-green.svg)
 ![Platform](https://img.shields.io/badge/platform-linux%20%7C%20macos-lightgrey.svg)
 ![Docker](https://img.shields.io/badge/docker-supported-2496ED.svg)
@@ -53,13 +53,13 @@
 
 ```bash
 # 一键安装
-curl -fsSL https://raw.githubusercontent.com/HUAYUE1024/cloud-deploy/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/HUAYUE1024/cloud-deploy/main/scripts/install.sh | bash
 
 # 或手动安装
 git clone https://github.com/HUAYUE1024/cloud-deploy.git
 cd cloud-deploy
-chmod +x install.sh
-./install.sh
+chmod +x scripts/install.sh
+./scripts/install.sh
 ```
 
 ### 初始化配置
@@ -123,6 +123,12 @@ deploy --logs --env production
 
 # 实时跟踪日志
 deploy --logs --follow
+
+# 系统监控
+deploy --monitor
+
+# 健康检查
+deploy --health http://example.com
 ```
 
 ### 部署方式
@@ -159,8 +165,6 @@ deploy --method kubernetes
 deploy --strategy blue-green
 ```
 
-![Blue-Green Deployment](docs/images/blue-green.png)
-
 1. 部署新版本到备用环境（绿色）
 2. 运行健康检查
 3. 切换流量到新版本
@@ -171,8 +175,6 @@ deploy --strategy blue-green
 ```bash
 deploy --strategy canary --canary-percent 10
 ```
-
-![Canary Deployment](docs/images/canary.png)
 
 1. 部署新版本到部分服务器（10% 流量）
 2. 监控错误率和性能
@@ -232,6 +234,14 @@ notifications:
   slack:
     enabled: false
     webhook: ${SLACK_WEBHOOK}
+
+  wechat:
+    enabled: false
+    webhook: ${WECHAT_WEBHOOK}
+
+  feishu:
+    enabled: false
+    webhook: ${FEISHU_WEBHOOK}
 ```
 
 ### 环境变量
@@ -253,6 +263,8 @@ SMTP_PASSWORD=your-app-password
 # 通知 Webhook
 DINGTALK_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=xxx
 SLACK_WEBHOOK=https://hooks.slack.com/services/xxx
+WECHAT_WEBHOOK=https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx
+FEISHU_WEBHOOK=https://open.feishu.cn/open-apis/bot/v2/hook/xxx
 ```
 
 ---
@@ -261,41 +273,38 @@ SLACK_WEBHOOK=https://hooks.slack.com/services/xxx
 
 ```
 cloud-deploy/
-├── src/                    # 源代码
-│   ├── deploy.sh          # 主部署脚本
-│   ├── utils.sh           # 工具函数
-│   ├── docker.sh          # Docker 相关函数
-│   ├── kubernetes.sh      # Kubernetes 相关函数
-│   ├── notifications.sh   # 通知函数
-│   └── monitoring.sh      # 监控函数
-├── config/                 # 配置文件
-│   ├── config.example.yaml # 配置示例
-│   └── templates/         # 配置模板
-├── scripts/                # 辅助脚本
-│   ├── install.sh         # 安装脚本
-│   ├── uninstall.sh       # 卸载脚本
-│   └── setup.sh           # 环境设置
-├── templates/              # 通知模板
-│   ├── email/             # 邮件模板
-│   ├── dingtalk/          # 钉钉模板
-│   └── slack/             # Slack 模板
-├── docs/                   # 文档
-│   ├── en/                # 英文文档
-│   ├── zh/                # 中文文档
-│   └── images/            # 图片
-├── tests/                  # 测试
-│   ├── unit/              # 单元测试
-│   └── integration/       # 集成测试
-├── examples/               # 示例
-│   ├── nodejs/            # Node.js 示例
-│   ├── python/            # Python 示例
-│   └── java/              # Java 示例
-├── .github/                # GitHub 配置
-│   └── workflows/         # GitHub Actions
-├── LICENSE                 # MIT 许可证
-├── README.md              # 项目说明
-└── CONTRIBUTING.md        # 贡献指南
+├── src/                        # 源代码
+│   ├── deploy.sh              # 主部署脚本（模块化架构）
+│   ├── utils.sh               # 工具函数库（日志、验证、系统信息等）
+│   ├── docker.sh              # Docker 函数库（镜像、容器、Compose 管理）
+│   ├── notifications.sh       # 通知函数库（邮件、钉钉、Slack、企业微信、飞书）
+│   └── monitoring.sh          # 监控函数库（健康检查、系统监控、告警）
+├── config/                     # 配置文件
+│   └── config.example.yaml   # 配置示例
+├── scripts/                    # 辅助脚本
+│   ├── install.sh             # 安装脚本
+│   └── uninstall.sh           # 卸载脚本
+├── tests/                      # 测试
+│   └── run-tests.sh           # 测试脚本
+├── .github/                    # GitHub 配置
+│   └── workflows/
+│       └── deploy.yml         # GitHub Actions 工作流
+├── Dockerfile                  # Docker 镜像
+├── docker-compose.yml          # Docker Compose 配置
+├── LICENSE                     # MIT 许可证
+├── README.md                   # 项目说明
+└── CONTRIBUTING.md             # 贡献指南
 ```
+
+### 模块说明
+
+| 模块 | 文件 | 功能 |
+|------|------|------|
+| 主脚本 | `deploy.sh` | 部署流程控制、CLI 接口、项目构建 |
+| 工具库 | `utils.sh` | 日志系统、系统信息、验证、加密、锁机制 |
+| Docker | `docker.sh` | 镜像构建/推送/拉取、容器管理、Compose、蓝绿/金丝雀部署 |
+| 通知 | `notifications.sh` | 邮件、钉钉、Slack、企业微信、飞书、自定义 Webhook |
+| 监控 | `monitoring.sh` | HTTP/TCP/Docker 健康检查、系统监控、资源告警、日志监控 |
 
 ---
 
@@ -352,7 +361,7 @@ deploy --env production
 ### 3. 自动化测试
 
 ```yaml
-# deploy.config.yaml
+# config.yaml
 project:
   test:
     enabled: true
@@ -365,11 +374,12 @@ project:
 ### 4. 监控告警
 
 ```yaml
-# deploy.config.yaml
+# config.yaml
 servers:
   production:
     monitoring:
       enabled: true
+      interval: 60
       alerts:
         cpu_threshold: 80
         memory_threshold: 85
@@ -379,7 +389,7 @@ servers:
 ### 5. 备份策略
 
 ```yaml
-# deploy.config.yaml
+# config.yaml
 servers:
   production:
     backup:
@@ -389,6 +399,24 @@ servers:
         daily: 7
         weekly: 4
         monthly: 12
+```
+
+### 6. 多渠道通知
+
+```yaml
+# config.yaml
+notifications:
+  email:
+    enabled: true
+    recipients:
+      - admin@example.com
+  dingtalk:
+    enabled: true
+    webhook: ${DINGTALK_WEBHOOK}
+  slack:
+    enabled: true
+    webhook: ${SLACK_WEBHOOK}
+    channel: "#deployments"
 ```
 
 ---
@@ -425,6 +453,16 @@ curl -v http://192.168.1.100/health
 ssh root@192.168.1.100 "systemctl status app"
 ```
 
+### 系统监控
+
+```bash
+# 查看系统状态
+deploy --monitor
+
+# 检查服务健康
+deploy --health http://192.168.1.100/health
+```
+
 ---
 
 ## 贡献指南
@@ -439,7 +477,7 @@ git clone https://github.com/HUAYUE1024/cloud-deploy.git
 cd cloud-deploy
 
 # 安装依赖
-./scripts/setup.sh
+./scripts/install.sh
 
 # 运行测试
 ./tests/run-tests.sh

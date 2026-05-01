@@ -103,6 +103,6 @@ shellcheck src/*.sh
 如有问题，请通过以下方式联系：
 
 - GitHub Issues
-- Email: huayue1024@example.com
+- Email: winc521521@gmail.com
 
 感谢您的贡献！

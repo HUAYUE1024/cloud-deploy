@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # Cloud Deploy - 企业级多云部署平台
-# 版本: 3.0.0
+# 版本: 3.1.0
 # 作者: HUAYUE1024
 # 仓库: https://github.com/HUAYUE1024/cloud-deploy
 #
@@ -12,66 +12,43 @@ set -euo pipefail
 # 配置和常量
 # ============================================
 
-readonly VERSION="3.0.0"
+readonly VERSION="3.1.0"
 readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly CONFIG_FILE="${DEPLOY_CONFIG:-$HOME/.deploy-tools/config.yaml}"
 readonly LOG_DIR="/var/log/deploy"
 readonly AUDIT_LOG="${LOG_DIR}/audit.log"
 readonly LOCK_FILE="/tmp/deploy.lock"
 
-# 颜色定义
-readonly RED='\033[0;31m'
-readonly GREEN='\033[0;32m'
-readonly YELLOW='\033[1;33m'
-readonly BLUE='\033[0;34m'
-readonly CYAN='\033[0;36m'
-readonly NC='\033[0m'
-
 # ============================================
-# 工具函数
+# 加载模块化库
 # ============================================
 
-# 日志函数
-log() {
-    local level=$1
-    shift
-    local message="$*"
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+# 加载工具函数库
+[ -f "${SCRIPT_DIR}/utils.sh" ] && source "${SCRIPT_DIR}/utils.sh"
 
-    case $level in
-        INFO)  echo -e "${GREEN}[INFO]${NC}  ${timestamp} - ${message}" ;;
-        WARN)  echo -e "${YELLOW}[WARN]${NC}  ${timestamp} - ${message}" ;;
-        ERROR) echo -e "${RED}[ERROR]${NC} ${timestamp} - ${message}" ;;
-        DEBUG) echo -e "${CYAN}[DEBUG]${NC} ${timestamp} - ${message}" ;;
-        *)     echo -e "${timestamp} - ${message}" ;;
-    esac
+# 加载 Docker 函数库
+[ -f "${SCRIPT_DIR}/docker.sh" ] && source "${SCRIPT_DIR}/docker.sh"
 
-    # 写入日志文件
-    if [ -d "${LOG_DIR}" ]; then
-        echo "[${level}] ${timestamp} - ${message}" >> "${LOG_DIR}/deploy.log"
-    fi
-}
+# 加载通知函数库
+[ -f "${SCRIPT_DIR}/notifications.sh" ] && source "${SCRIPT_DIR}/notifications.sh"
 
-# 审计日志
-audit_log() {
-    local action=$1
-    local user=${2:-$(whoami)}
-    local details=${3:-""}
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+# 加载监控函数库
+[ -f "${SCRIPT_DIR}/monitoring.sh" ] && source "${SCRIPT_DIR}/monitoring.sh"
 
-    if [ -d "${LOG_DIR}" ]; then
-        echo "${timestamp}|${user}|${action}|${details}" >> "${AUDIT_LOG}"
-    fi
-}
+# ============================================
+# 错误处理和清理
+# ============================================
 
 # 错误处理
 error_handler() {
     local line_no=$1
     local error_code=$2
-    log ERROR "脚本执行失败，行号: ${line_no}, 错误码: ${error_code}"
+    log_error "脚本执行失败，行号: ${line_no}, 错误码: ${error_code}"
 
     # 发送失败通知
-    send_notification "failure" "部署失败" "错误发生在第 ${line_no} 行，错误码: ${error_code}"
+    if type send_all_notifications &> /dev/null; then
+        send_all_notifications "failure" "部署失败" "错误发生在第 ${line_no} 行，错误码: ${error_code}"
+    fi
 
     # 清理资源
     cleanup
@@ -83,7 +60,7 @@ trap 'error_handler ${LINENO} $?' ERR
 
 # 清理函数
 cleanup() {
-    log INFO "执行清理操作..."
+    log_info "执行清理操作..."
 
     # 释放锁
     rm -f "${LOCK_FILE}"
@@ -99,10 +76,14 @@ cleanup() {
 
 trap cleanup EXIT
 
+# ============================================
+# 配置管理
+# ============================================
+
 # 加载配置
 load_config() {
     if [ ! -f "${CONFIG_FILE}" ]; then
-        log WARN "配置文件不存在: ${CONFIG_FILE}，使用默认配置"
+        log_warn "配置文件不存在: ${CONFIG_FILE}，使用默认配置"
         CONFIG="{}"
         return 0
     fi
@@ -111,8 +92,7 @@ load_config() {
     if command -v yq &> /dev/null; then
         CONFIG=$(cat "${CONFIG_FILE}")
     else
-        # 如果没有 yq，尝试使用简单的配置解析
-        log WARN "yq 未安装，使用简化配置解析"
+        log_warn "yq 未安装，使用简化配置解析"
         CONFIG="{}"
     fi
 }
@@ -138,8 +118,6 @@ get_config() {
 # 环境变量替换
 replace_env_vars() {
     local input=$1
-
-    # 替换 ${VAR} 格式的环境变量
     echo "${input}" | sed -e 's|\${\([^}]*\)}|${\1:-}|g' | envsubst
 }
 
@@ -181,13 +159,30 @@ scp_upload() {
     fi
 }
 
+# SCP 下载函数
+scp_download() {
+    local host=$1
+    local user=$2
+    local password=$3
+    local src=$4
+    local dst=$5
+
+    local scp_opts="-o StrictHostKeyChecking=no -o ConnectTimeout=10 -r"
+
+    if command -v sshpass &> /dev/null; then
+        sshpass -p "${password}" scp ${scp_opts} "${user}@${host}:${src}" "${dst}"
+    else
+        scp ${scp_opts} "${user}@${host}:${src}" "${dst}"
+    fi
+}
+
 # ============================================
 # 项目检测和构建
 # ============================================
 
 # 检测项目类型
 detect_project_type() {
-    log INFO "检测项目类型..."
+    log_info "检测项目类型..."
 
     if [ -f "package.json" ]; then
         echo "nodejs"
@@ -223,7 +218,7 @@ get_version() {
 build_project() {
     local project_type=$1
 
-    log INFO "开始构建项目 (类型: ${project_type})"
+    log_info "开始构建项目 (类型: ${project_type})"
 
     case ${project_type} in
         nodejs)
@@ -248,19 +243,19 @@ build_project() {
             build_ruby
             ;;
         docker)
-            log INFO "Docker 项目，跳过构建"
+            log_info "Docker 项目，跳过构建"
             ;;
         *)
-            log WARN "未知项目类型，跳过构建"
+            log_warn "未知项目类型，跳过构建"
             ;;
     esac
 
-    log INFO "项目构建完成"
+    log_info "项目构建完成"
 }
 
 # Node.js 构建
 build_nodejs() {
-    log INFO "构建 Node.js 项目..."
+    log_info "构建 Node.js 项目..."
 
     if [ -f "yarn.lock" ]; then
         yarn install --frozen-lockfile
@@ -276,7 +271,7 @@ build_nodejs() {
 
 # Python 构建
 build_python() {
-    log INFO "构建 Python 项目..."
+    log_info "构建 Python 项目..."
 
     if [ -f "requirements.txt" ]; then
         pip install -r requirements.txt
@@ -287,7 +282,7 @@ build_python() {
 
 # Java 构建
 build_java() {
-    log INFO "构建 Java 项目..."
+    log_info "构建 Java 项目..."
 
     if [ -f "pom.xml" ]; then
         mvn clean package -DskipTests
@@ -298,13 +293,38 @@ build_java() {
 
 # Go 构建
 build_golang() {
-    log INFO "构建 Go 项目..."
+    log_info "构建 Go 项目..."
 
     export CGO_ENABLED=0
     export GOOS=linux
     export GOARCH=amd64
 
     go build -ldflags="-w -s" -o app ./cmd/app
+}
+
+# PHP 构建
+build_php() {
+    log_info "构建 PHP 项目..."
+
+    if [ -f "composer.json" ]; then
+        composer install --no-dev --optimize-autoloader
+    fi
+}
+
+# Rust 构建
+build_rust() {
+    log_info "构建 Rust 项目..."
+
+    cargo build --release
+}
+
+# Ruby 构建
+build_ruby() {
+    log_info "构建 Ruby 项目..."
+
+    if [ -f "Gemfile" ]; then
+        bundle install --without development test
+    fi
 }
 
 # ============================================
@@ -315,7 +335,7 @@ build_golang() {
 run_tests() {
     local project_type=$1
 
-    log INFO "开始运行测试..."
+    log_info "开始运行测试..."
 
     case ${project_type} in
         nodejs)
@@ -330,16 +350,26 @@ run_tests() {
         golang)
             go test ./...
             ;;
+        php)
+            phpunit
+            ;;
+        rust)
+            cargo test
+            ;;
+        ruby)
+            bundle exec rspec
+            ;;
         *)
-            log WARN "跳过测试"
+            log_warn "跳过测试"
+            return 0
             ;;
     esac
 
     if [ $? -eq 0 ]; then
-        log INFO "测试通过"
+        log_info "测试通过"
         return 0
     else
-        log ERROR "测试失败"
+        log_error "测试失败"
         return 1
     fi
 }
@@ -356,7 +386,7 @@ deploy_direct() {
     local deploy_path=$4
     local version=$5
 
-    log INFO "执行直接部署到 ${host}..."
+    log_info "执行直接部署到 ${host}..."
 
     # 备份当前版本
     backup_current_version "${host}" "${user}" "${password}" "${deploy_path}"
@@ -409,7 +439,7 @@ deploy_direct() {
     # 清理本地临时文件
     rm -f "/tmp/${package_name}"
 
-    log INFO "直接部署完成"
+    log_info "直接部署完成"
 }
 
 # Docker 部署
@@ -420,59 +450,12 @@ deploy_docker() {
     local image_name=$4
     local version=$5
 
-    log INFO "执行 Docker 部署到 ${host}..."
+    log_info "执行 Docker 部署到 ${host}..."
 
-    # 构建镜像
-    docker build -t "${image_name}:${version}" .
-    docker tag "${image_name}:${version}" "${image_name}:latest"
+    # 使用 Docker 函数库进行远程部署
+    docker_remote_deploy "${host}" "${user}" "${password}" "${image_name}" "${version}"
 
-    # 保存镜像
-    docker save "${image_name}:${version}" | gzip > /tmp/app-image.tar.gz
-
-    # 上传镜像
-    scp_upload "${host}" "${user}" "${password}" "/tmp/app-image.tar.gz" "/tmp/"
-
-    # 部署容器
-    ssh_connect "${host}" "${user}" "${password}" "
-        # 加载镜像
-        docker load < /tmp/app-image.tar.gz
-
-        # 停止旧容器
-        docker stop ${image_name} 2>/dev/null || true
-        docker rm ${image_name} 2>/dev/null || true
-
-        # 启动新容器
-        docker run -d \
-            --name ${image_name} \
-            --restart unless-stopped \
-            -p 80:80 \
-            -p 443:443 \
-            -v /data/${image_name}:/app/data \
-            -v /var/log/${image_name}:/app/logs \
-            -e APP_ENV=production \
-            -e LOG_LEVEL=info \
-            --memory=4g \
-            --cpus=2 \
-            ${image_name}:${version}
-
-        # 等待容器启动
-        sleep 5
-
-        # 检查容器状态
-        if ! docker ps | grep -q ${image_name}; then
-            echo '容器启动失败'
-            docker logs ${image_name}
-            exit 1
-        fi
-
-        # 清理临时文件
-        rm -f /tmp/app-image.tar.gz
-    "
-
-    # 清理本地临时文件
-    rm -f /tmp/app-image.tar.gz
-
-    log INFO "Docker 部署完成"
+    log_info "Docker 部署完成"
 }
 
 # 蓝绿部署
@@ -483,107 +466,65 @@ deploy_blue_green() {
     local image_name=$4
     local version=$5
 
-    log INFO "执行蓝绿部署..."
+    log_info "执行蓝绿部署..."
 
-    # 获取当前活跃环境
-    local current_env=$(ssh_connect "${host}" "${user}" "${password}" "
-        docker ps --format '{{.Names}}' | grep -E '^(blue|green)$' | head -1
-    " || echo "")
+    # 使用 Docker 函数库进行蓝绿部署
+    docker_remote_blue_green "${host}" "${user}" "${password}" "${image_name}" "${version}"
 
-    # 确定新环境
-    if [ "${current_env}" = "blue" ]; then
-        local new_env="green"
-        local new_port=8081
-    else
-        local new_env="blue"
-        local new_port=8080
-    fi
+    log_info "蓝绿部署完成"
+}
 
-    log INFO "当前环境: ${current_env:-无}, 部署新版本到: ${new_env}"
+# 金丝雀部署
+deploy_canary() {
+    local host=$1
+    local user=$2
+    local password=$3
+    local image_name=$4
+    local version=$5
+    local canary_percent=${6:-10}
 
-    # 构建镜像
-    docker build -t "${image_name}:${version}" .
+    log_info "执行金丝雀部署 (${canary_percent}% 流量)..."
 
-    # 保存镜像
-    docker save "${image_name}:${version}" | gzip > /tmp/app-image.tar.gz
+    # 构建新版本
+    docker_build "${image_name}" "${version}"
+    local image_file=$(docker_save "${image_name}" "${version}")
 
     # 上传镜像
-    scp_upload "${host}" "${user}" "${password}" "/tmp/app-image.tar.gz" "/tmp/"
+    scp_upload "${host}" "${user}" "${password}" "${image_file}" "/tmp/"
 
-    # 部署新版本
+    # 部署金丝雀版本
     ssh_connect "${host}" "${user}" "${password}" "
         # 加载镜像
-        docker load < /tmp/app-image.tar.gz
+        docker load < /tmp/$(basename ${image_file})
 
-        # 停止新环境
-        docker stop ${new_env} 2>/dev/null || true
-        docker rm ${new_env} 2>/dev/null || true
+        # 停止旧的金丝雀容器
+        docker stop canary 2>/dev/null || true
+        docker rm canary 2>/dev/null || true
 
-        # 启动新版本
+        # 启动金丝雀容器
         docker run -d \
-            --name ${new_env} \
+            --name canary \
             --restart unless-stopped \
-            -p ${new_port}:80 \
+            -p 8081:80 \
             ${image_name}:${version}
 
-        # 清理临时文件
-        rm -f /tmp/app-image.tar.gz
-    "
-
-    # 清理本地临时文件
-    rm -f /tmp/app-image.tar.gz
-
-    # 健康检查
-    if ! health_check "${host}" "${new_port}" "/health" 30; then
-        log ERROR "新版本健康检查失败，回滚"
-
-        ssh_connect "${host}" "${user}" "${password}" "
-            docker stop ${new_env} 2>/dev/null || true
-            docker rm ${new_env} 2>/dev/null || true
-        "
-
-        return 1
-    fi
-
-    # 切换流量
-    ssh_connect "${host}" "${user}" "${password}" "
-        # 更新 Nginx 配置
+        # 配置 Nginx 金丝雀路由
         if [ -f /etc/nginx/conf.d/app.conf ]; then
-            sed -i 's/localhost:[0-9]*/localhost:${new_port}/' /etc/nginx/conf.d/app.conf
+            cat > /etc/nginx/conf.d/canary.conf << 'NGINX'
+upstream backend {
+    server localhost:80 weight=90;
+    server localhost:8081 weight=10;
+}
+NGINX
             nginx -s reload
         fi
 
-        # 停止旧环境
-        docker stop ${current_env} 2>/dev/null || true
+        rm -f /tmp/$(basename ${image_file})
     "
 
-    log INFO "蓝绿部署完成"
-}
+    rm -f "${image_file}"
 
-# 健康检查
-health_check() {
-    local host=$1
-    local port=$2
-    local url=$3
-    local timeout=$4
-
-    log INFO "执行健康检查: http://${host}:${port}${url}"
-
-    local start_time=$(date +%s)
-    local end_time=$((start_time + timeout))
-
-    while [ $(date +%s) -lt ${end_time} ]; do
-        if curl -sf "http://${host}:${port}${url}" > /dev/null 2>&1; then
-            log INFO "健康检查通过"
-            return 0
-        fi
-
-        log DEBUG "等待服务启动..."
-        sleep 2
-    done
-
-    log ERROR "健康检查超时"
-    return 1
+    log_info "金丝雀部署完成"
 }
 
 # ============================================
@@ -598,7 +539,7 @@ rollback() {
     local deploy_path=$4
     local version=${5:-""}
 
-    log INFO "开始回滚..."
+    log_info "开始回滚..."
 
     if [ -z "${version}" ]; then
         # 获取上一版本
@@ -609,11 +550,11 @@ rollback() {
     fi
 
     if [ -z "${version}" ]; then
-        log ERROR "没有可回滚的版本"
+        log_error "没有可回滚的版本"
         return 1
     fi
 
-    log INFO "回滚到版本: ${version}"
+    log_info "回滚到版本: ${version}"
 
     # 执行回滚
     ssh_connect "${host}" "${user}" "${password}" "
@@ -636,9 +577,11 @@ rollback() {
     "
 
     # 发送回滚通知
-    send_notification "rollback" "部署回滚" "已回滚到版本: ${version}"
+    if type notify_rollback &> /dev/null; then
+        notify_rollback "$(basename $(pwd))" "$(get_version)" "${version}"
+    fi
 
-    log INFO "回滚完成"
+    log_info "回滚完成"
 }
 
 # ============================================
@@ -652,7 +595,7 @@ backup_current_version() {
     local password=$3
     local deploy_path=$4
 
-    log INFO "备份当前版本..."
+    log_info "备份当前版本..."
 
     local backup_path="/opt/backups"
     local timestamp=$(date '+%Y%m%d%H%M%S')
@@ -671,147 +614,7 @@ backup_current_version() {
         fi
     "
 
-    log INFO "备份完成"
-}
-
-# ============================================
-# 通知系统
-# ============================================
-
-# 发送通知
-send_notification() {
-    local status=$1
-    local title=$2
-    local content=$3
-
-    # 发送邮件通知
-    send_email_notification "${status}" "${title}" "${content}"
-
-    # 发送钉钉通知
-    send_dingtalk_notification "${status}" "${title}" "${content}"
-
-    # 发送 Slack 通知
-    send_slack_notification "${status}" "${title}" "${content}"
-}
-
-# 邮件通知
-send_email_notification() {
-    local status=$1
-    local title=$2
-    local content=$3
-
-    local enabled=$(get_config ".notifications.email.enabled" "false")
-
-    if [ "${enabled}" != "true" ]; then
-        return 0
-    fi
-
-    log INFO "发送邮件通知..."
-
-    local smtp_host=$(get_config ".notifications.email.smtp.host" "")
-    local smtp_port=$(get_config ".notifications.email.smtp.port" "587")
-    local smtp_user=$(replace_env_vars "$(get_config ".notifications.email.smtp.auth.user" "")")
-    local smtp_pass=$(replace_env_vars "$(get_config ".notifications.email.smtp.auth.password" "")")
-    local from=$(get_config ".notifications.email.from" "")
-    local recipients=$(get_config ".notifications.email.recipients[]" "")
-
-    # 构建邮件内容
-    local subject="[${status}] ${title}"
-    local body="部署通知\n\n状态: ${status}\n标题: ${title}\n内容: ${content}\n时间: $(date '+%Y-%m-%d %H:%M:%S')\n版本: $(get_version)"
-
-    # 发送邮件
-    for recipient in ${recipients}; do
-        echo -e "${body}" | mail -s "${subject}" \
-            -S smtp="smtp://${smtp_host}:${smtp_port}" \
-            -S smtp-auth=login \
-            -S smtp-auth-user="${smtp_user}" \
-            -S smtp-auth-password="${smtp_pass}" \
-            -S from="${from}" \
-            "${recipient}" 2>/dev/null || true
-    done
-
-    log INFO "邮件通知已发送"
-}
-
-# 钉钉通知
-send_dingtalk_notification() {
-    local status=$1
-    local title=$2
-    local content=$3
-
-    local enabled=$(get_config ".notifications.dingtalk.enabled" "false")
-
-    if [ "${enabled}" != "true" ]; then
-        return 0
-    fi
-
-    log INFO "发送钉钉通知..."
-
-    local webhook=$(replace_env_vars "$(get_config ".notifications.dingtalk.webhook" "")")
-
-    local status_icon="✅"
-    if [ "${status}" = "failure" ]; then
-        status_icon="❌"
-    elif [ "${status}" = "rollback" ]; then
-        status_icon="⚠️"
-    fi
-
-    curl -s -X POST "${webhook}" \
-        -H 'Content-Type: application/json' \
-        -d "{
-            \"msgtype\": \"markdown\",
-            \"markdown\": {
-                \"title\": \"${status_icon} ${title}\",
-                \"text\": \"${status_icon} **${title}**\n\n${content}\n\n---\n**时间**: $(date '+%Y-%m-%d %H:%M:%S')\n**版本**: $(get_version)\"
-            }
-        }" 2>/dev/null || true
-
-    log INFO "钉钉通知已发送"
-}
-
-# Slack 通知
-send_slack_notification() {
-    local status=$1
-    local title=$2
-    local content=$3
-
-    local enabled=$(get_config ".notifications.slack.enabled" "false")
-
-    if [ "${enabled}" != "true" ]; then
-        return 0
-    fi
-
-    log INFO "发送 Slack 通知..."
-
-    local webhook=$(replace_env_vars "$(get_config ".notifications.slack.webhook" "")")
-    local channel=$(get_config ".notifications.slack.channel" "#deployments")
-
-    local status_icon="✅"
-    local color="#4CAF50"
-
-    if [ "${status}" = "failure" ]; then
-        status_icon="❌"
-        color="#F44336"
-    elif [ "${status}" = "rollback" ]; then
-        status_icon="⚠️"
-        color="#FF9800"
-    fi
-
-    curl -s -X POST "${webhook}" \
-        -H 'Content-Type: application/json' \
-        -d "{
-            \"channel\": \"${channel}\",
-            \"attachments\": [
-                {
-                    \"color\": \"${color}\",
-                    \"title\": \"${status_icon} ${title}\",
-                    \"text\": \"${content}\",
-                    \"footer\": \"$(date '+%Y-%m-%d %H:%M:%S') | $(get_version)\"
-                }
-            ]
-        }" 2>/dev/null || true
-
-    log INFO "Slack 通知已发送"
+    log_info "备份完成"
 }
 
 # ============================================
@@ -833,19 +636,19 @@ main_deploy() {
     local version=$(get_version)
     local project_name=$(basename "$(pwd)")
 
-    log INFO "=========================================="
-    log INFO "开始部署 ${project_name} (${version})"
-    log INFO "环境: ${env}"
-    log INFO "方式: ${method}"
-    log INFO "策略: ${strategy}"
-    log INFO "=========================================="
+    log_info "=========================================="
+    log_info "开始部署 ${project_name} (${version})"
+    log_info "环境: ${env}"
+    log_info "方式: ${method}"
+    log_info "策略: ${strategy}"
+    log_info "=========================================="
 
     # 审计日志
     audit_log "deploy_start" "$(whoami)" "env=${env}, version=${version}"
 
     # 检测项目类型
     local project_type=$(detect_project_type)
-    log INFO "项目类型: ${project_type}"
+    log_info "项目类型: ${project_type}"
 
     # 构建项目
     build_project "${project_type}"
@@ -853,8 +656,12 @@ main_deploy() {
     # 运行测试
     if [ "${skip_test}" != "true" ]; then
         if ! run_tests "${project_type}"; then
-            log ERROR "测试失败"
-            send_notification "failure" "部署失败 - ${project_name}" "测试未通过"
+            log_error "测试失败"
+
+            if type notify_deploy_failure &> /dev/null; then
+                notify_deploy_failure "${project_name}" "测试未通过"
+            fi
+
             audit_log "deploy_failed" "$(whoami)" "reason=test_failed"
             exit 1
         fi
@@ -872,27 +679,31 @@ main_deploy() {
             deploy_blue_green "${host}" "${user}" "${password}" "${project_name}" "${version}"
             ;;
         canary)
-            log WARN "金丝雀部署暂未实现，使用蓝绿部署代替"
-            deploy_blue_green "${host}" "${user}" "${password}" "${project_name}" "${version}"
+            deploy_canary "${host}" "${user}" "${password}" "${project_name}" "${version}"
             ;;
         *)
-            log ERROR "不支持的部署策略: ${strategy}"
+            log_error "不支持的部署策略: ${strategy}"
             exit 1
             ;;
     esac
 
     # 健康检查
     if [ "${force}" != "true" ]; then
-        if ! health_check "${host}" "80" "/health" 30; then
-            log ERROR "健康检查失败"
+        if type wait_for_healthy &> /dev/null; then
+            if ! wait_for_healthy "tcp" "${host}:80" 30; then
+                log_error "健康检查失败"
 
-            # 自动回滚
-            log INFO "开始自动回滚..."
-            rollback "${host}" "${user}" "${password}" "/var/www/app"
+                # 自动回滚
+                log_info "开始自动回滚..."
+                rollback "${host}" "${user}" "${password}" "/var/www/app"
 
-            send_notification "failure" "部署失败 - ${project_name}" "健康检查未通过，已自动回滚"
-            audit_log "deploy_failed" "$(whoami)" "reason=health_check_failed"
-            exit 1
+                if type notify_deploy_failure &> /dev/null; then
+                    notify_deploy_failure "${project_name}" "健康检查未通过，已自动回滚"
+                fi
+
+                audit_log "deploy_failed" "$(whoami)" "reason=health_check_failed"
+                exit 1
+            fi
         fi
     fi
 
@@ -900,14 +711,15 @@ main_deploy() {
     local duration=$((end_time - start_time))
 
     # 发送成功通知
-    local notify_content="**项目**: ${project_name}\n**版本**: ${version}\n**环境**: ${env}\n**服务器**: ${host}\n**耗时**: ${duration}秒\n**状态**: 部署成功"
+    if type notify_deploy_success &> /dev/null; then
+        notify_deploy_success "${project_name}" "${version}" "${env}" "${host}" "${duration}"
+    fi
 
-    send_notification "success" "部署成功 - ${project_name}" "${notify_content}"
     audit_log "deploy_success" "$(whoami)" "version=${version}, duration=${duration}s"
 
-    log INFO "=========================================="
-    log INFO "部署完成！耗时 ${duration} 秒"
-    log INFO "=========================================="
+    log_info "=========================================="
+    log_info "部署完成！耗时 ${duration} 秒"
+    log_info "=========================================="
 }
 
 # ============================================
@@ -929,6 +741,8 @@ Cloud Deploy - 企业级多云部署平台 v${VERSION}
   history                 查看部署历史
   logs                    查看日志
   config                  管理配置
+  monitor                 系统监控
+  health                  健康检查
 
 选项:
   --env ENV               部署环境 (production/staging/development)
@@ -951,6 +765,8 @@ Cloud Deploy - 企业级多云部署平台 v${VERSION}
   deploy --status
   deploy --history
   deploy --logs --follow
+  deploy --monitor
+  deploy --health http://example.com
 
 环境变量:
   DEPLOY_CONFIG           配置文件路径
@@ -960,6 +776,8 @@ Cloud Deploy - 企业级多云部署平台 v${VERSION}
   SMTP_PASSWORD           邮件密码
   DINGTALK_WEBHOOK        钉钉 Webhook
   SLACK_WEBHOOK           Slack Webhook
+  WECHAT_WEBHOOK          企业微信 Webhook
+  FEISHU_WEBHOOK          飞书 Webhook
 EOF
 }
 
@@ -975,10 +793,12 @@ parse_args() {
     VERSION=""
     SKIP_TEST=false
     FORCE=false
+    MONITOR_TARGET=""
+    HEALTH_TARGET=""
 
     while [[ $# -gt 0 ]]; do
         case $1 in
-            init|deploy|rollback|status|history|logs|config)
+            init|deploy|rollback|status|history|logs|config|monitor|health)
                 COMMAND="$1"
                 shift
                 ;;
@@ -1018,12 +838,21 @@ parse_args() {
                 FORCE=true
                 shift
                 ;;
+            --monitor)
+                COMMAND="monitor"
+                shift
+                ;;
+            --health)
+                COMMAND="health"
+                HEALTH_TARGET="$2"
+                shift 2
+                ;;
             --help|-h)
                 show_help
                 exit 0
                 ;;
             *)
-                log ERROR "未知参数: $1"
+                log_error "未知参数: $1"
                 show_help
                 exit 1
                 ;;
@@ -1062,11 +891,15 @@ interactive_input() {
     if [ "${STRATEGY}" = "direct" ]; then
         echo "选择部署策略:"
         echo "1) 直接部署"
-        echo "2) 蓝绿部署"
+        echo "2) 滚动更新"
+        echo "3) 蓝绿部署"
+        echo "4) 金丝雀部署"
         read -p "请选择 [1]: " strategy_choice
 
         case ${strategy_choice} in
-            2) STRATEGY="blue-green" ;;
+            2) STRATEGY="rolling" ;;
+            3) STRATEGY="blue-green" ;;
+            4) STRATEGY="canary" ;;
             *) STRATEGY="direct" ;;
         esac
     fi
@@ -1076,7 +909,7 @@ interactive_input() {
 main() {
     # 检查锁
     if [ -f "${LOCK_FILE}" ]; then
-        log ERROR "部署正在进行中，请稍后再试"
+        log_error "部署正在进行中，请稍后再试"
         exit 1
     fi
 
@@ -1092,9 +925,9 @@ main() {
     # 执行命令
     case ${COMMAND} in
         init)
-            log INFO "初始化配置..."
+            log_info "初始化配置..."
             mkdir -p ~/.deploy-tools
-            log INFO "配置目录已创建: ~/.deploy-tools"
+            log_info "配置目录已创建: ~/.deploy-tools"
             ;;
         deploy|"")
             interactive_input
@@ -1115,16 +948,41 @@ main() {
             rollback "${HOST}" "${USER}" "${PASSWORD}" "/var/www/app" "${VERSION}"
             ;;
         status)
-            log INFO "查看部署状态..."
+            log_info "查看部署状态..."
+            # TODO: 实现状态查看
             ;;
         history)
-            log INFO "查看部署历史..."
+            log_info "查看部署历史..."
+            # TODO: 实现历史查看
             ;;
         logs)
-            log INFO "查看日志..."
+            log_info "查看日志..."
+            # TODO: 实现日志查看
             ;;
         config)
-            log INFO "管理配置..."
+            log_info "管理配置..."
+            # TODO: 实现配置管理
+            ;;
+        monitor)
+            log_info "系统监控..."
+            if type get_system_snapshot &> /dev/null; then
+                get_system_snapshot
+            else
+                log_error "监控模块未加载"
+            fi
+            ;;
+        health)
+            log_info "健康检查: ${HEALTH_TARGET}"
+            if type health_check_http &> /dev/null; then
+                if health_check_http "${HEALTH_TARGET}"; then
+                    log_info "健康检查通过"
+                else
+                    log_error "健康检查失败"
+                    exit 1
+                fi
+            else
+                log_error "监控模块未加载"
+            fi
             ;;
         *)
             show_help

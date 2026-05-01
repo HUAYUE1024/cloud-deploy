@@ -1,7 +1,13 @@
-# Cloud Deploy 配置文件示例
+# ============================================
+# Cloud Deploy 配置文件
+# 版本: 3.1.0
+# ============================================
 # 复制此文件为 config.yaml 并根据实际情况修改
+# 支持环境变量替换: ${VAR_NAME}
 
+# ============================================
 # 项目配置
+# ============================================
 project:
   name: my-app
   type: auto  # 自动检测: nodejs/python/java/golang/php/rust/ruby/docker
@@ -25,7 +31,9 @@ project:
       enabled: true
       threshold: 80
 
+# ============================================
 # 服务器配置
+# ============================================
 servers:
   # 生产环境
   production:
@@ -35,6 +43,7 @@ servers:
       port: 22
       user: root
       password: ${SERVER_PASSWORD}  # 支持环境变量
+      # key_file: ~/.ssh/id_rsa  # SSH 密钥认证（可选）
 
     deployment:
       path: /var/www/app
@@ -59,6 +68,7 @@ servers:
           resources:
             memory: 4g
             cpus: 2
+          restart_policy: unless-stopped
 
       # 蓝绿部署配置
       blue_green:
@@ -80,6 +90,7 @@ servers:
     # 监控配置
     monitoring:
       enabled: true
+      interval: 60
       alerts:
         cpu_threshold: 80
         memory_threshold: 85
@@ -135,7 +146,9 @@ servers:
     backup:
       enabled: false
 
+# ============================================
 # 通知配置
+# ============================================
 notifications:
   # 邮件通知
   email:
@@ -143,6 +156,7 @@ notifications:
     smtp:
       host: smtp.gmail.com
       port: 587
+      ssl: true
       auth:
         user: ${SMTP_USER}
         password: ${SMTP_PASSWORD}
@@ -155,6 +169,7 @@ notifications:
   dingtalk:
     enabled: false
     webhook: ${DINGTALK_WEBHOOK}
+    # secret: ${DINGTALK_SECRET}  # 加签密钥（可选）
 
   # Slack 通知
   slack:
@@ -177,8 +192,12 @@ notifications:
     enabled: false
     url: ${WEBHOOK_URL}
     method: POST
+    headers:
+      Authorization: "Bearer ${WEBHOOK_TOKEN}"
 
+# ============================================
 # 安全配置
+# ============================================
 security:
   # 访问控制
   access_control:
@@ -202,7 +221,16 @@ security:
     path: /var/log/deploy/audit.log
     retention: 90
 
+  # 密钥管理
+  secrets:
+    provider: env  # env/vault/aws-sm/aliyun-kms
+    # vault:
+    #   address: ${VAULT_ADDR}
+    #   token: ${VAULT_TOKEN}
+
+# ============================================
 # CI/CD 集成
+# ============================================
 cicd:
   # GitHub Actions
   github:
@@ -221,7 +249,9 @@ cicd:
     job: my-app-deploy
     token: ${JENKINS_TOKEN}
 
+# ============================================
 # 性能优化
+# ============================================
 performance:
   build:
     parallel: true
@@ -231,9 +261,12 @@ performance:
   deploy:
     parallel: false
     batch_size: 1
+    timeout: 600
 
   # CDN 配置
   cdn:
     enabled: false
     provider: aliyun
     domain: cdn.example.com
+    # access_key: ${CDN_ACCESS_KEY}
+    # secret_key: ${CDN_SECRET_KEY}
