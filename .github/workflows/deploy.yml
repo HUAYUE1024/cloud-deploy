@@ -1,5 +1,5 @@
 # Cloud Deploy - GitHub Actions 工作流
-# 使用此工作流自动部署项目到云服务器
+# 自动测试和部署 shell 脚本项目
 
 name: Deploy
 
@@ -8,7 +8,6 @@ on:
     branches:
       - main
       - master
-      - production
   pull_request:
     branches:
       - main
@@ -55,8 +54,6 @@ env:
   SERVER_PASSWORD: ${{ secrets.SERVER_PASSWORD }}
   DOCKER_USER: ${{ secrets.DOCKER_USER }}
   DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
-  SMTP_USER: ${{ secrets.SMTP_USER }}
-  SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
   DINGTALK_WEBHOOK: ${{ secrets.DINGTALK_WEBHOOK }}
   SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
 
@@ -66,56 +63,52 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # 代码检查
+  # Shell 脚本检查
   lint:
-    name: Code Lint
+    name: Shell Lint
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Run ShellCheck
+        run: |
+          shellcheck src/*.sh scripts/*.sh tests/*.sh || true
 
-      - name: Run linter
-        run: npm run lint
+      - name: Check bash syntax
+        run: |
+          for f in src/*.sh scripts/*.sh; do
+            echo "Checking: $f"
+            bash -n "$f" || exit 1
+          done
 
   # 单元测试
   test:
     name: Unit Tests
     runs-on: ubuntu-latest
     needs: lint
-    strategy:
-      matrix:
-        node-version: [16, 18, 20]
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node-version }}
-          cache: 'npm'
+      - name: Make scripts executable
+        run: chmod +x src/*.sh scripts/*.sh tests/*.sh
 
       - name: Install dependencies
-        run: npm ci
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq sshpass mailutils curl wget git
+
+      - name: Install yq
+        run: |
+          sudo wget -qO /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          sudo chmod +x /usr/local/bin/yq
 
       - name: Run tests
-        run: npm test -- --coverage
-
-      - name: Upload coverage
-        uses: codecov/codecov-action@v3
-        with:
-          file: ./coverage/lcov.info
-          flags: unittests
-          name: codecov-umbrella
+        run: cd tests && bash run-tests.sh
 
   # 安全扫描
   security:
@@ -135,57 +128,28 @@ jobs:
           exit-code: '0'
           severity: 'CRITICAL,HIGH'
 
-      - name: Run npm audit
-        run: npm audit --production || true
-
-  # 构建
-  build:
-    name: Build
-    runs-on: ubuntu-latest
-    needs: [test, security]
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build project
-        run: npm run build
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-${{ github.sha }}
-          path: dist/
-          retention-days: 7
+      - name: Check for secrets
+        run: |
+          echo "Checking for potential secrets..."
+          if grep -rn "password\|secret\|token\|key" src/ config/ --include="*.sh" --include="*.yaml" | grep -v "example\|test\|PASSWORD\|SECRET\|WEBHOOK"; then
+            echo "Warning: Potential secrets found in code"
+          fi
 
   # Docker 构建
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: build
+    needs: [test, security]
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Download build artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: build-${{ github.sha }}
-          path: dist/
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Login to Docker Hub
+        if: env.DOCKER_USER != ''
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USER }}
@@ -202,45 +166,15 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
 
-      - name: Build and push Docker image
+      - name: Build Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
-          push: true
+          push: ${{ env.DOCKER_USER != '' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  # 部署到开发环境
-  deploy-development:
-    name: Deploy to Development
-    runs-on: ubuntu-latest
-    needs: docker
-    if: github.ref == 'refs/heads/develop'
-    environment:
-      name: development
-      url: http://dev.example.com
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install deploy tool
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/HUAYUE1024/cloud-deploy/main/scripts/install.sh | bash
-
-      - name: Deploy to development
-        env:
-          SERVER_HOST: ${{ secrets.DEV_SERVER_HOST }}
-          SERVER_USER: ${{ secrets.DEV_SERVER_USER }}
-          SERVER_PASSWORD: ${{ secrets.DEV_SERVER_PASSWORD }}
-        run: |
-          deploy --env development \
-                 --method direct \
-                 --strategy direct \
-                 --host $SERVER_HOST \
-                 --user $SERVER_USER \
-                 --password $SERVER_PASSWORD
 
   # 部署到测试环境
   deploy-staging:
@@ -257,7 +191,8 @@ jobs:
 
       - name: Install deploy tool
         run: |
-          curl -fsSL https://raw.githubusercontent.com/HUAYUE1024/cloud-deploy/main/scripts/install.sh | bash
+          chmod +x scripts/install.sh
+          sudo ./scripts/install.sh
 
       - name: Deploy to staging
         env:
@@ -265,12 +200,16 @@ jobs:
           SERVER_USER: ${{ secrets.STAGING_SERVER_USER }}
           SERVER_PASSWORD: ${{ secrets.STAGING_SERVER_PASSWORD }}
         run: |
-          deploy --env staging \
-                 --method docker \
-                 --strategy rolling \
-                 --host $SERVER_HOST \
-                 --user $SERVER_USER \
-                 --password $SERVER_PASSWORD
+          if [ -n "$SERVER_HOST" ]; then
+            deploy --env staging \
+                   --method direct \
+                   --strategy rolling \
+                   --host $SERVER_HOST \
+                   --user $SERVER_USER \
+                   --password $SERVER_PASSWORD
+          else
+            echo "Staging server not configured, skipping deployment"
+          fi
 
   # 部署到生产环境
   deploy-production:
@@ -287,7 +226,8 @@ jobs:
 
       - name: Install deploy tool
         run: |
-          curl -fsSL https://raw.githubusercontent.com/HUAYUE1024/cloud-deploy/main/scripts/install.sh | bash
+          chmod +x scripts/install.sh
+          sudo ./scripts/install.sh
 
       - name: Deploy to production
         env:
@@ -295,27 +235,34 @@ jobs:
           SERVER_USER: ${{ secrets.PROD_SERVER_USER }}
           SERVER_PASSWORD: ${{ secrets.PROD_SERVER_PASSWORD }}
         run: |
-          deploy --env production \
-                 --method docker \
-                 --strategy blue-green \
-                 --host $SERVER_HOST \
-                 --user $SERVER_USER \
-                 --password $SERVER_PASSWORD
+          if [ -n "$SERVER_HOST" ]; then
+            deploy --env production \
+                   --method docker \
+                   --strategy blue-green \
+                   --host $SERVER_HOST \
+                   --user $SERVER_USER \
+                   --password $SERVER_PASSWORD
+          else
+            echo "Production server not configured, skipping deployment"
+          fi
 
   # 部署通知
   notify:
     name: Send Notification
     runs-on: ubuntu-latest
-    needs: [deploy-production, deploy-staging, deploy-development]
+    needs: [deploy-production, deploy-staging]
     if: always()
     steps:
       - name: Send DingTalk notification
         if: env.DINGTALK_WEBHOOK != ''
         run: |
-          STATUS=${{ needs.deploy-production.result || needs.deploy-staging.result || needs.deploy-development.result }}
+          STATUS=${{ needs.deploy-production.result || needs.deploy-staging.result || 'skipped' }}
           if [ "$STATUS" = "success" ]; then
             STATUS_ICON="✅"
             STATUS_TEXT="成功"
+          elif [ "$STATUS" = "skipped" ]; then
+            STATUS_ICON="⏭️"
+            STATUS_TEXT="跳过"
           else
             STATUS_ICON="❌"
             STATUS_TEXT="失败"
@@ -334,10 +281,13 @@ jobs:
       - name: Send Slack notification
         if: env.SLACK_WEBHOOK != ''
         run: |
-          STATUS=${{ needs.deploy-production.result || needs.deploy-staging.result || needs.deploy-development.result }}
+          STATUS=${{ needs.deploy-production.result || needs.deploy-staging.result || 'skipped' }}
           if [ "$STATUS" = "success" ]; then
             COLOR="#4CAF50"
             STATUS_TEXT="成功"
+          elif [ "$STATUS" = "skipped" ]; then
+            COLOR="#2196F3"
+            STATUS_TEXT="跳过"
           else
             COLOR="#F44336"
             STATUS_TEXT="失败"
