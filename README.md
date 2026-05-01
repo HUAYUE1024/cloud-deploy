@@ -502,7 +502,7 @@ cd cloud-deploy
 ## 联系方式
 
 - **作者**: HUAYUE1024
-- **邮箱**: huayue1024@example.com
+- **邮箱**: winc521521@gmail.com
 - **GitHub**: [@HUAYUE1024](https://github.com/HUAYUE1024)
 
 ---

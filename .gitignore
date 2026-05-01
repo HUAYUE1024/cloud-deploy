@@ -8,6 +8,13 @@ __pycache__/
 venv/
 env/
 .env
+.env.*
+
+# Build
+dist/
+build/
+*.egg-info/
+*.egg
 
 # Build
 dist/
@@ -84,3 +91,13 @@ reports/
 *.swp
 *.swo
 *~
+
+# Windows batch files (should not be committed)
+*.bat
+*.cmd
+*.ps1
+
+# Secrets and credentials
+*.env
+.env.*
+config.yaml
