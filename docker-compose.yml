@@ -1,0 +1,57 @@
+# Cloud Deploy Docker Compose
+# 用于本地开发和测试
+
+version: '3.8'
+
+services:
+  # 部署工具
+  deploy:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cloud-deploy:latest
+    container_name: cloud-deploy
+    volumes:
+      # 挂载配置文件
+      - ./config:/app/config:ro
+      # 挂载 SSH 密钥
+      - ~/.ssh:/root/.ssh:ro
+      # 挂载项目代码
+      - .:/app/workspace
+      # 挂载 Docker socket（用于 Docker 部署）
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      - DEPLOY_CONFIG=/app/config/config.yaml
+      - SERVER_PASSWORD=${SERVER_PASSWORD:-}
+      - DOCKER_USER=${DOCKER_USER:-}
+      - DOCKER_PASSWORD=${DOCKER_PASSWORD:-}
+    working_dir: /app/workspace
+    entrypoint: ["deploy"]
+    command: ["--help"]
+
+  # 测试环境
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: cloud-deploy:latest
+    container_name: cloud-deploy-test
+    volumes:
+      - ./config:/app/config:ro
+      - ./tests:/app/tests:ro
+      - .:/app/workspace
+    environment:
+      - DEPLOY_CONFIG=/app/config/config.test.yaml
+    working_dir: /app/workspace
+    entrypoint: ["/bin/bash"]
+    command: ["-c", "echo 'Running tests...' && /app/tests/run-tests.sh"]
+
+  # 文档服务
+  docs:
+    image: nginx:alpine
+    container_name: cloud-deploy-docs
+    ports:
+      - "8080:80"
+    volumes:
+      - ./docs:/usr/share/nginx/html:ro
+    restart: unless-stopped

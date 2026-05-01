@@ -1,0 +1,239 @@
+# Cloud Deploy 配置文件示例
+# 复制此文件为 config.yaml 并根据实际情况修改
+
+# 项目配置
+project:
+  name: my-app
+  type: auto  # 自动检测: nodejs/python/java/golang/php/rust/ruby/docker
+  version_strategy: git-tag  # git-tag/git-hash/timestamp/semantic
+  healthCheckUrl: /health
+  healthCheckTimeout: 30
+
+  # 构建配置
+  build:
+    command: ""  # 自定义构建命令，留空则自动检测
+    cache:
+      enabled: true
+      path: .build-cache
+      ttl: 3600
+
+  # 测试配置
+  test:
+    enabled: true
+    command: ""  # 自定义测试命令
+    coverage:
+      enabled: true
+      threshold: 80
+
+# 服务器配置
+servers:
+  # 生产环境
+  production:
+    name: 生产环境
+    connection:
+      host: 192.168.1.100
+      port: 22
+      user: root
+      password: ${SERVER_PASSWORD}  # 支持环境变量
+
+    deployment:
+      path: /var/www/app
+      method: docker  # direct/docker/kubernetes
+      strategy: blue-green  # direct/rolling/blue-green/canary
+
+      # Docker 配置
+      docker:
+        image: my-app
+        registry: registry.cn-hangzhou.aliyuncs.com
+        namespace: production
+        container:
+          ports:
+            - "80:80"
+            - "443:443"
+          volumes:
+            - /data/app:/app/data
+            - /var/log/app:/app/logs
+          environment:
+            APP_ENV: production
+            LOG_LEVEL: info
+          resources:
+            memory: 4g
+            cpus: 2
+
+      # 蓝绿部署配置
+      blue_green:
+        health_check:
+          url: /health
+          timeout: 30
+          interval: 5
+          retries: 3
+
+      # 金丝雀部署配置
+      canary:
+        initial_percent: 10
+        increment: 20
+        interval: 300
+        metrics:
+          error_rate_threshold: 0.01
+          latency_p95_threshold: 200
+
+    # 监控配置
+    monitoring:
+      enabled: true
+      alerts:
+        cpu_threshold: 80
+        memory_threshold: 85
+        disk_threshold: 90
+        error_rate_threshold: 0.05
+
+    # 备份配置
+    backup:
+      enabled: true
+      path: /opt/backups
+      retention:
+        daily: 7
+        weekly: 4
+        monthly: 12
+
+  # 测试环境
+  staging:
+    name: 测试环境
+    connection:
+      host: 192.168.1.101
+      port: 22
+      user: root
+      password: ${SERVER_PASSWORD}
+
+    deployment:
+      path: /var/www/app
+      method: direct
+      strategy: rolling
+
+    monitoring:
+      enabled: true
+
+    backup:
+      enabled: false
+
+  # 开发环境
+  development:
+    name: 开发环境
+    connection:
+      host: localhost
+      port: 22
+      user: developer
+      password: ${DEV_PASSWORD}
+
+    deployment:
+      path: /home/developer/app
+      method: direct
+      strategy: direct
+
+    monitoring:
+      enabled: false
+
+    backup:
+      enabled: false
+
+# 通知配置
+notifications:
+  # 邮件通知
+  email:
+    enabled: false
+    smtp:
+      host: smtp.gmail.com
+      port: 587
+      auth:
+        user: ${SMTP_USER}
+        password: ${SMTP_PASSWORD}
+    from: "deploy@example.com"
+    recipients:
+      - admin@example.com
+      - dev-team@example.com
+
+  # 钉钉通知
+  dingtalk:
+    enabled: false
+    webhook: ${DINGTALK_WEBHOOK}
+
+  # Slack 通知
+  slack:
+    enabled: false
+    webhook: ${SLACK_WEBHOOK}
+    channel: "#deployments"
+
+  # 企业微信
+  wechat_work:
+    enabled: false
+    webhook: ${WECHAT_WORK_WEBHOOK}
+
+  # 飞书
+  feishu:
+    enabled: false
+    webhook: ${FEISHU_WEBHOOK}
+
+  # 自定义 Webhook
+  webhook:
+    enabled: false
+    url: ${WEBHOOK_URL}
+    method: POST
+
+# 安全配置
+security:
+  # 访问控制
+  access_control:
+    enabled: false
+    allowed_ips:
+      - 192.168.1.0/24
+      - 10.0.0.0/8
+
+  # SSL/TLS
+  ssl:
+    enabled: false
+    provider: letsencrypt  # letsencrypt/custom
+    domains:
+      - app.example.com
+      - api.example.com
+    auto_renew: true
+
+  # 审计日志
+  audit:
+    enabled: true
+    path: /var/log/deploy/audit.log
+    retention: 90
+
+# CI/CD 集成
+cicd:
+  # GitHub Actions
+  github:
+    enabled: false
+    workflow: deploy.yml
+
+  # GitLab CI
+  gitlab:
+    enabled: false
+    pipeline: .gitlab-ci.yml
+
+  # Jenkins
+  jenkins:
+    enabled: false
+    url: ${JENKINS_URL}
+    job: my-app-deploy
+    token: ${JENKINS_TOKEN}
+
+# 性能优化
+performance:
+  build:
+    parallel: true
+    cache:
+      enabled: true
+
+  deploy:
+    parallel: false
+    batch_size: 1
+
+  # CDN 配置
+  cdn:
+    enabled: false
+    provider: aliyun
+    domain: cdn.example.com
